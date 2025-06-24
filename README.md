@@ -15,6 +15,7 @@ docker build -t project .
 
 This will create a Docker image with all the required software and packages for the analysis.
 
+
 ### 2. Run the Docker Container
 
 To execute the analysis, run the following command. This will mount your local directory to the container and automatically generate the .html report:
@@ -24,6 +25,7 @@ docker run -it -v "$PWD":/home/project project
 
 This will render the project_DE_LISA_PAOLA.Rmd file and generate the output in the local directory.
 
+
 ### Files included
 
 Dockerfile: The configuration to build the Docker image with the necessary software and libraries.
@@ -31,6 +33,7 @@ Dockerfile: The configuration to build the Docker image with the necessary softw
 project_DE_LISA_PAOLA.Rmd: The main R Markdown script used to perform the analysis and generate the report.
 
 data/: A folder containing the input data files that are required for the analysis.
+
 
 ### Known Issues or Limitations
 
