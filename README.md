@@ -33,7 +33,6 @@ Known Issues or Limitations
 Rendering may fail on machines with limited memory. If you encounter memory issues, try running the analysis interactively (by entering the container) or increase the memory allocation for Docker.
 
 Start the container in interactive mode:
-<!-- end list -->
 
 Bash
 
@@ -41,8 +40,6 @@ docker run -it -v "$PWD":/home/project project bash
 Open R inside the container
 
 Run
-
-<!-- end list -->
 
 Bash
 
