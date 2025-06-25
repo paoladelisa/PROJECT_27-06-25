@@ -1,6 +1,6 @@
 # Project for Programming Course (AA 2025)
 
-This repository contains a Dockerized analysis pipeline. The project includes a pre-configured Docker container that installs all the necessary R packages and dependencies to perform the analysis described in the `project_DE_LISA_PAOLA.Rmd`.
+This repository contains the instruction and the files ncessary to perform the analysis required in the project. It includes a pre-configured Docker container that installs all the necessary R packages and dependencies to perform the analysis described in the `project_DE_LISA_PAOLA.Rmd`.
 
 ## Getting Started
 
