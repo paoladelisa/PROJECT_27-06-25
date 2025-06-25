@@ -1,0 +1,279 @@
+---
+title: "Project Programming Course (Mol. Biotech)"
+author: "Paola De Lisa"
+date: "2025-06-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+**PART 1** & **PART 2**
+Docker set up: Dockerfile created to install R and all the necessary packages, starting from Ubuntu base image. 
+
+The following R packages were installed in the Docker container:
+-Seurat 
+-Signac 
+-ggplot2
+-dplyr
+-Matrix
+-data.table
+-rmarkdown
+-GenomicRanges (Bioconductor package)
+
+After several attempts to install the required packages from a base Ubuntu image, the installation repeatedly failed. Initially, the installation broke during the installation of Bioconductor packages. Thus, I split the installation steps, in order to identify exactly where each error occurred.
+
+The process continued to fail during the installation of Signac. Due to the significant amount of time required for each build, and since every attempt to correct the first block invalidated the Docker cache, I decided to temporarily switch to a container based on an image with R and Bioconductor already preinstalled. This allowed me to test the installation of Signac locally and identify the missing system dependencies. Then, I incorporated them into the original Dockerfile and successfully rebuilt the container starting from the Ubuntu base image, as required by the assignment. The installation finally completed without errors.
+
+However, since they weren't necessary for the execution of the following analyses, I didn't load the Seurat and Signac libraries.
+
+```{r, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(Matrix)
+library(data.table)
+library(GenomicRanges)
+```
+
+**PART 3 **
+#STEP 1
+Open the sparse matrix and convert it to a dense matrix, save as data.table object. 
+
+I loaded the necessary files to build the full matrix (d_mat).
+Since rownames are not present in the datatable object, I created an ID column in the datatable.
+
+```{r, echo = TRUE, warning= FALSE}
+sp_mat <- readMM("data/matrix.mtx")
+d_mat <- as.matrix(sp_mat)
+
+features <- fread("data/features.tsv")
+barcodes <- fread("data/barcodes.tsv", header = F)
+
+rownames(d_mat) <- features[, V1]
+colnames(d_mat) <- barcodes[,V1]
+
+#creating a vector to assign rownames to the dt object
+id_genes <- rownames(d_mat)
+
+dt <- as.data.table(d_mat)
+dt[, ID:= id_genes]
+setcolorder(dt, c("ID", setdiff(names(dt), "ID")))
+
+#fwrite(d_mat, file = "data/dt_feat_bar.tsv")
+```
+
+#STEP 2
+Split Gene Expression and ATAC-seq Data from the data.table object.
+
+I decided to use grep also for the ATAC-seq data to exclude non standard chromosomes.
+```{r, echo = TRUE, warning= FALSE}
+expression <- dt[grep("ENSG", ID)]
+atac <- dt[grep("chr", ID)]
+```
+
+#STEP 3
+Summarize Data.
+
+I computed the column-wise sum and assigned IDs.
+```{r, echo = TRUE, warning= FALSE}
+expr_tot <- rowSums(expression[, .SD, .SDcols = is.numeric])
+chrom_tot <- rowSums(atac[, .SD, .SDcols = is.numeric])
+
+names(expr_tot) <- expression$ID
+names(chrom_tot) <- atac$ID
+```
+
+#STEP 4
+Create Genomic Ranges.
+
+Before the creation of the GR object, I filtered the file containing features (Chromosome, Start and End) with the Gene Expression file, and I removed NA or blank spaces to reject errors in the GR creation. I filtered the summarised expression also.
+
+Then, I removed non standard chromosomes to reduce the dataset. 
+
+```{r, echo = TRUE, warning= FALSE}
+feat <- features[V1 %in% expression$ID]
+feat <- feat[!is.na(feat$V4) & feat$V4 != "", ]
+
+expr_tot <- expr_tot[names(expr_tot) %in% feat$V1]
+
+gene_gr <- GRanges(
+  seqnames = feat$V4,
+  ranges = IRanges(start = as.numeric(feat$V5),
+                   end = as.numeric(feat$V6)),
+                   ID = names(expr_tot),
+                   expression = expr_tot) #36588
+
+chr.keep <- seqnames(gene_gr) %in% standardChromosomes(gene_gr)
+gene_gr <- gene_gr[chr.keep] #36559
+```
+
+I did the same for the ATAC-seq data, with no need of filtering beacause no NA/blank spaces were present.
+
+```{r, echo = TRUE, warning= FALSE}
+feat_atac <- features[V1 %in% atac$ID]
+feat_atac <- feat_atac[!is.na(feat_atac$V4) & feat_atac$V4 != "", ]
+
+atac_gr <- GRanges(
+  seqnames = feat_atac$V4,
+  ranges = IRanges(start = as.numeric(feat_atac$V5),
+                   end = as.numeric(feat_atac$V6)),
+                   chr_access = chrom_tot)
+```
+
+#STEP 5
+Gene Annotation for ATAC-seq data: create a GenomicRanges object only for protein-coding genes and only for gene features (Using the annotation file Homo_sapiens.GRCh38.114.gtf.gz)
+
+I unzipped the annotation file with double click and filter it to obtain only protein coding genes ID with gene symbol anotated (in the description dataframe). 
+Finally, the gtf file contained chromosomes, start, end and strand, ID and gene symbol.
+Then, I created the the GR object containing only protein coding genes and filtered out non standard chromosomes.
+
+```{r, echo = TRUE, warning= FALSE}
+annot <- fread("data/Homo_sapiens.GRCh38.114.gtf", header = F)
+
+names(annot) = c("chr","prediction", "type", "start", "end", "space", "strand", "space", "description")
+gtf_genes <- annot[type=="gene"]
+gtf_genes <- gtf_genes[grepl("protein_coding", description)] 
+gtf_genes <- gtf_genes[grepl("gene_name", description)] #19477 
+
+description <- strsplit(gtf_genes$description,";")
+description <- as.data.frame(description, check.names = F)
+description <- as.data.frame(t(description))
+rownames(description) = NULL
+
+description <- data.frame(description$V1, description$V3)
+
+description$description.V1 <- sub("gene_id ", "", description$description.V1)
+description$description.V1 <- gsub('"', '', description$description.V1)
+
+description$description.V3 <- sub("gene_name ", "", description$description.V3)
+description$description.V3 <- gsub('"', '', description$description.V3)
+
+names(description) <- c("ID","symbol")
+
+gtf_genes <- data.frame(gtf_genes[,1:8], description)
+gtf_genes$chr = paste("chr", gtf_genes$chr, sep="")
+
+gtf_gr <- GRanges(
+  seqnames = gtf_genes$chr,
+  ranges = IRanges(start = gtf_genes$start,
+                   end = gtf_genes$end),
+                   ID = gtf_genes$ID,
+                   symbol = gtf_genes$symbol) #19477
+
+chr.keep <- seqnames(granges(gtf_gr)) %in% standardChromosomes(granges(gtf_gr))
+gtf_gr <- gtf_gr[as.vector(chr.keep), ] #19463
+```
+
+-Remap the ATAC-seq GenomicRanges with summarized peak data.
+
+I found the overlapping genomic ranges between the gtf file and the previously created atac file and created a new object resulting from the overlap. 
+
+```{r, echo = TRUE, warning= FALSE}
+hits <- findOverlaps(gtf_gr, atac_gr)
+
+gtf_atac_gr <- gtf_gr
+gtf_atac_gr$chr_access <- NA
+gtf_atac_gr$chr_access[queryHits(hits)] <- mcols(atac_gr)$chr_access[subjectHits(hits)]
+gtf_atac_gr <- gtf_atac_gr[!is.na(mcols(gtf_atac_gr)$chr_access)]
+```
+
+#STEP 6
+Subset the expression GenomicRanges to include only protein-coding genes and add gene symbols.
+
+I decided to directly subset the gene expression GR object based on the gene ID present in the gtf file. Then, I changed the order of the metadata columns just to make the object more clean. 
+
+```{r, echo = TRUE, warning= FALSE}
+gene_gr <- gene_gr[mcols(gene_gr)$ID %in% mcols(gtf_gr)$ID] #19174
+
+gene_symbols <- mcols(gtf_gr)$symbol
+mcols(gene_gr)$symbol <- gene_symbols[match(mcols(gene_gr)$ID, mcols(gtf_gr)$ID)]
+
+order <- c("ID", "symbol", "expression")
+mcols(gene_gr) <- mcols(gene_gr)[, order]
+```
+
+#STEP 7
+Normalize both expression and ATAC-seq data using CPM.
+
+```{r, echo = TRUE, warning= FALSE}
+expression <- mcols(gene_gr)$expression
+atacseq <- mcols(gtf_atac_gr)$chr_access
+
+expression_cpm <- (expression/sum(expression)) * 10^6
+expression_cpm <- log2(expression_cpm + 1)
+
+atacseq_cpm <- (atacseq/sum(atacseq)) * 10^6
+atacseq_cpm <- log2(atacseq_cpm + 1)
+```
+
+Merge expression and ATAC data based on common genes. 
+1) Provide a summary table of the genes which do not show association with ATAC peaks and plot their expression distribution chromosome by chromosome.
+
+I created two dataframes out of the GR objects to take advantage of the common IDs. Since I want to exclude genes with no ATAC-peak associated, I used left_join to retain only IDs present in the gene expression dataframe.
+Then, I filtered out ID with NA in the chrom_accessibility column, because they are the ones not associated to ATAC-peaks: genes_no_atac is the summary table.
+
+I created a subset of the df_atac just to clean up the dataframe.
+
+```{r, echo = TRUE, warning= FALSE}
+df_expr <- as.data.frame(gene_gr)
+df_expr$expression_CPM <- expression_cpm
+
+df_atac <- as.data.frame(gtf_atac_gr)
+df_atac$atac_CPM <- atacseq_cpm
+
+df_atac_subset <- select(df_atac, "ID", "chr_access", "atac_CPM")
+
+merged_df <- left_join(df_expr, df_atac_subset, by = "ID")
+
+genes_no_atac <- merged_df %>%
+  filter(is.na(chr_access))
+```
+
+2) Provide a summary table of the number of ATAC peaks that could not be merged and
+a plot of peak intensity distribution chromosome by chromosome.
+
+In this case I exploited findOverlaps because in the ATAC object the ID column was not present, so I merged based on the genomic range. 
+I created a dataframe with the ATAC peaks not overlapped with the gene expressione object, in order to use summarise and provide a summary table of the number of peaks with no associated gene expression, for each chromosome.
+
+Plots are provided below.
+
+```{r, echo = TRUE, warning= FALSE}
+hits1 <- findOverlaps(atac_gr, gene_gr)
+non_overlapping_atac <- atac_gr[-queryHits(hits1)]
+
+df_nonmerged <- as.data.frame(non_overlapping_atac)
+
+summary_nonmerged <- df_nonmerged %>%
+  group_by(seqnames) %>%
+  summarise(n_unmerged_peaks = n())
+```
+
+#STEP 8 
+Generate a scatter plot using ggplot2:
+X-axis: log-transformed expression CPM, Y-axis: log-transformed ATAC CPM
+
+```{r pressure, echo=TRUE, warning = FALSE}
+ggplot(genes_no_atac, aes(x= seqnames, y= log10(expression+1)))+
+  geom_boxplot(outlier.shape = NA) +
+  theme_bw() +
+  labs(y="log10(Gene expression)", x="Chromosome", title = "Genes not associated with ATAC peaks")
+
+ggplot(df_nonmerged, aes(x= seqnames, y= log10(chr_access+1)))+
+  geom_boxplot(outlier.shape = NA) +
+  theme_bw() +
+  labs(y="log10(Chromatine Accessibility)", 
+       x="Chromosome", 
+       title = "Peak intensity distribution (unmerged)")
+
+ggplot(merged_df, aes(x = log2(expression_CPM+1), y = log2(atac_CPM+1))) +
+  geom_point(alpha = 0.3, size = 0.8, color = "blue") +
+  theme_bw() +
+  labs(x = "log2(Expression CPM",
+       y = "log2(ATAC CPM)") +
+  facet_wrap(~seqnames) +
+  theme_minimal()
+```
+
+
